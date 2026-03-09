@@ -1,0 +1,8 @@
+# CamelClaw Git Ignore
+config.pl
+.env
+logs/
+projects/
+.gemini/
+*.log
+/tmp/
