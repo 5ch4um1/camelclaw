@@ -3,6 +3,16 @@ use strict;
 use warnings;
 use File::Slurper qw(write_text read_text);
 
+my $config = do 'config.pl' or die "Could not load config.pl: $!";
+my $PROJECTS_ROOT = $config->{projects_root};
+
+sub _resolve_path {
+    my ($path) = @_;
+    return $path if !$path || $path =~ m{^/}; # Absolute path
+    return "$PROJECTS_ROOT/$path" unless $path =~ s{^/?projects/}{};
+    return "$PROJECTS_ROOT/$path";
+}
+
 sub register {
     return {
         'write_file' => {
@@ -17,8 +27,9 @@ sub register {
             },
             code => sub { 
                 my ($args) = @_;
-                write_text($args->{path}, $args->{content});
-                return "File written: $args->{path}";
+                my $path = _resolve_path($args->{path});
+                write_text($path, $args->{content});
+                return "File written: $path";
             }
         },
         'read_file' => {
@@ -30,7 +41,15 @@ sub register {
             },
             code => sub { 
                 my ($args) = @_;
-                return read_text($args->{path});
+                my $path = _resolve_path($args->{path});
+                if (-f $path) {
+                    return read_text($path);
+                }
+                else {
+                    my $dir = $PROJECTS_ROOT;
+                    my $ls_out = `ls -l $dir`;
+                    return "Error: File not found at '$path'.\n\nDirectory listing for '$dir':\n$ls_out";
+                }
             }
         },
         'run_shell' => {
@@ -76,13 +95,14 @@ sub register {
             },
             code => sub {
                 my ($args) = @_;
-                my $content = read_text($args->{path});
+                my $path = _resolve_path($args->{path});
+                my $content = read_text($path);
                 my ($old, $new) = ($args->{old_string}, $args->{new_string});
                 if ($content =~ s/\Q$old\E/$new/) {
-                    write_text($args->{path}, $content);
-                    return "Successfully replaced text in $args->{path}";
+                    write_text($path, $content);
+                    return "Successfully replaced text in $path";
                 } else {
-                    return "Error: Could not find exact match for 'old_string' in $args->{path}";
+                    return "Error: Could not find exact match for 'old_string' in $path";
                 }
             }
         }

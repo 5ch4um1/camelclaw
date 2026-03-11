@@ -9,7 +9,8 @@ CamelClaw is an autonomous Perl-based agent designed for high-speed Linux and ES
 - **Skill System:** Modular toolsets (`System`, `ESP32`, `ModifySelf`) that the agent can utilize to interact with the host and target.
 - **Robust Monitoring:** Background logging with automated success/error detection and unique session-based log files.
 - **Interactive UI:** Curses-based terminal interface for rich user input and real-time guidance.
-- **Model Flexibility:** Supports Google Cloud Vertex AI (Gemini 2.0 Flash/Lite) and Local Models (OpenAI-compatible APIs).
+- **Model Flexibility:** Supports Google Cloud Vertex AI (Gemini 2.5/3.1) and Local Models (OpenAI-compatible APIs).
+- **Sub-Agent Orchestration (ACP):** Control external `gemini` CLI sessions autonomously via the Agent Communication Protocol (ACP).
 
 ## Prerequisites
 
@@ -67,7 +68,7 @@ CamelClaw uses a `.env` file for configuration. A template is provided in `.env.
 | `PROJECTS_ROOT` | **Mandatory.** Directory where CamelClaw projects are stored. |
 | `LOCAL_API_URL` | URL for local OpenAI-compatible API. |
 | `GEMINI_LOCAL_TOKEN` | Bearer token for local API. |
-| `GEMINI_MODEL` | Default model (e.g., `gemini-2.0-flash-001`). |
+| `GEMINI_MODEL` | Default model (e.g., `gemini-2.5-flash`). |
 
 ### Starting CamelClaw
 Run the main script:
@@ -76,7 +77,7 @@ perl camelclaw.pl
 ```
 If you want to skip the menu and provide a goal immediately:
 ```bash
-perl camelclaw.pl --model=gemini-2.0-flash-001 "Create a blink project for ESP32-C3 on GPIO 8"
+perl camelclaw.pl --model=gemini-2.5-flash "Create a blink project for ESP32-C3 on GPIO 8"
 ```
 
 ## How It Works
@@ -89,6 +90,7 @@ perl camelclaw.pl --model=gemini-2.0-flash-001 "Create a blink project for ESP32
     - **`System.pm`**: General Linux utilities (read/write files, run shell commands).
     - **`ESP32.pm`**: Deep integration with `idf.py`. Manages the full lifecycle of an ESP32 project.
     - **`ModifySelf.pm`**: Allows the agent to improve its own skills or the kernel logic.
+    - **`GeminiACP.pm`**: Orchestrates external Gemini sessions via the ACP protocol.
 
 ### The Debugging Protocol
 CamelClaw includes a built-in "Debugging Protocol" that helps the agent distinguish between:
@@ -97,6 +99,13 @@ CamelClaw includes a built-in "Debugging Protocol" that helps the agent distingu
 - **Communication Failures:** Serial port conflicts or incorrect wiring.
 
 The kernel appends "Hints" to tool outputs to guide the model toward the correct root cause, preventing it from hallucinating serial port issues when the code simply doesn't compile.
+
+### Sub-Agent Orchestration (ACP)
+CamelClaw can spawn and control sub-agents using the **Agent Communication Protocol (ACP)**. This allows the primary agent to delegate complex tasks to specialized Gemini instances.
+- **Tool-based Delegation:** The agent uses `acp_spawn_agent` to start a new stateful session.
+- **State Persistence:** Sub-agents maintain their own tool-calling history and project context.
+- **Visual Distinction:** Sub-agent activity is color-coded (Magenta/Cyan) and "boxed" in the logs for clear visibility.
+- **YOLO Mode:** Sub-agents run in full autonomous mode to prevent blocking the primary execution loop.
 
 ### Background Processes
 When the agent starts a `monitor` or `flash` task, the Kernel forks a background process. 

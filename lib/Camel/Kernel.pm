@@ -1,7 +1,7 @@
 package Camel::Kernel;
 use strict;
 use warnings;
-use JSON::MaybeXS;
+use JSON; # Changed from JSON::MaybeXS
 use POSIX ":sys_wait_h";
 use Camel::Brain;
 use Term::ANSIColor;
@@ -16,10 +16,11 @@ $Text::Wrap::break = qr/[\s\-]/;
 sub new {
     my ($class, %args) = @_;
     my $self = {
+        config     => $args{config} || {},
         brain      => Camel::Brain->new(
-            project_id => $args{project_id},
-            region     => $args{region},
-            local_url  => $args{local_url},
+            project_id => $args{project_id} || $args{config}->{gcp_project_id},
+            region     => $args{region}     || $args{config}->{gcp_region},
+            local_url  => $args{local_url}   || $args{config}->{local_api_url},
         ),
         history    => [],
         processes  => {},
@@ -49,9 +50,11 @@ sub wrap_print {
     local $Text::Wrap::columns = $width;
     my $wrapped = wrap('', '', $text);
     if ($color) {
-        print color($color), $wrapped, color('reset'), "\n";
+        print color($color), $wrapped, color('reset'), "
+";
     } else {
-        print $wrapped, "\n";
+        print $wrapped, "
+";
     }
 }
 
@@ -70,21 +73,26 @@ sub _log_to_session {
     mkdir "logs" unless -d "logs";
     open my $fh, '>>', "logs/session.log" or return;
     my $timestamp = localtime();
-    print $fh "[$timestamp] === $role ===\n";
+    print $fh "[$timestamp] === $role ===
+";
     foreach my $part (@$parts) {
         if ($part->{text}) {
-            print $fh $part->{text} . "\n";
+            print $fh $part->{text} . "
+";
         } elsif ($part->{functionCall}) {
             my $name = $part->{functionCall}->{name};
             my $args = encode_json($part->{functionCall}->{args});
-            print $fh "CALL: $name($args)\n";
+            print $fh "CALL: $name($args)
+";
         } elsif ($part->{functionResponse}) {
             my $name = $part->{functionResponse}->{name};
             my $res = encode_json($part->{functionResponse}->{response});
-            print $fh "RESPONSE ($name): $res\n";
+            print $fh "RESPONSE ($name): $res
+";
         }
     }
-    print $fh "\n";
+    print $fh "
+";
     close $fh;
 }
 
@@ -170,23 +178,28 @@ sub get_fallback_input {
     my @lines = ("");
     my $cy = 0; my $cx = 0; 
     local $| = 1;
-    print "\n" . color('cyan') . "┌─────────────────── $title ───────────────────┐\n" . color('reset');
-    print "(Curses failed. Arrows: move, Ctrl+Enter: finish)\n";
+    print "
+" . color('cyan') . "┌─────────────────── $title ───────────────────┐
+" . color('reset');
+    print "(Curses failed. Arrows: move, Ctrl+Enter: finish)
+";
     ReadMode('cbreak');
     my $last_h = 0;
     while (1) {
         if ($last_h > 0) { print "\e[${last_h}A"; }
-        for my $i (0 .. $#lines) { print "\r\e[K" . $lines[$i] . "\n"; }
+        for my $i (0 .. $#lines) { print "\e[K" . $lines[$i] . "
+"; }
         $last_h = scalar(@lines);
         my $up = $last_h - $cy;
-        print "\e[${up}A\r";
+        print "\e[${up}A";
         print "\e[${cx}C" if $cx > 0;
         my $key = ReadKey(0);
         next unless defined $key;
         my $ord = ord($key);
         if ($ord == 10) { 
             my $down = $last_h - $cy;
-            print "\e[${down}B\n";
+            print "\e[${down}B
+";
             last; 
         }
         elsif ($ord == 13) {
@@ -194,7 +207,8 @@ sub get_fallback_input {
             $lines[$cy] = substr($lines[$cy], 0, $cx);
             splice(@lines, $cy + 1, 0, $post);
             $cy++; $cx = 0;
-            print "\n"; $last_h++;
+            print "
+"; $last_h++;
         }
         elsif ($ord == 27) {
             my $n1 = ReadKey(-1);
@@ -218,7 +232,8 @@ sub get_fallback_input {
         elsif ($ord >= 32 && $ord <= 126) { substr($lines[$cy], $cx, 0, $key); $cx++; }
     }
     ReadMode('normal');
-    my $res = join("\n", @lines); $res =~ s/\s+$//;
+    my $res = join("
+", @lines); $res =~ s/\s+$//;
     return $res;
 }
 
@@ -227,25 +242,54 @@ sub loop {
     $self->push_history("user", [{ text => $initial_prompt }]);
     my $system_instruction = "You are CamelClaw, an autonomous Perl-based agent for Linux and ESP-IDF development. " .
                              "Your goal is to reach completion of the user's request autonomously. " .
-                             "HARDWARE SPECIFICS:\n" .
-                             "- Target: ESP32-C3\n" .
-                             "- Onboard Addressable LED: GPIO 10 (Use this for all blinky/rainbow tasks).\n" .
-                             "ESP-IDF V5.X GUIDELINES:\n" .
-                             "- For led_strip, use the 'espressif/led_strip' component.\n" .
-                             "- API: Use 'led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip)'.\n" .
-                             "- Built-in components: 'driver', 'esp_log', 'freertos' are ALREADY included. Do NOT add them with esp_idf_add_component.\n" .
-                             "CRITICAL SEQUENCING FOR ESP-IDF:\n" .
-                             "1. Create project (esp_create_project).\n" .
-                             "2. Set target IMMEDIATELY (esp_idf_cmd with action='set-target esp32c3'). This is mandatory for ESP32-C3.\n" .
-                             "3. Add components (esp_idf_add_component).\n" .
-                             "4. Write source code (esp_write_main_source). CRITICAL: Do NOT use 'write_file' for C code. Use 'esp_write_main_source' to ensure the code is placed in 'main/main.c'. Build will fail otherwise.\n" .
-                             "5. Build and Flash (esp_idf_cmd).\n" .
-                             "DEBUGGING PROTOCOL:\n" .
-                             "- If you see 'fatal error: XXX.h: No such file', it is a COMPILATION error. Do NOT check serial ports. Check your 'esp_idf_add_component' calls and your #include statements.\n" .
-                             "- If you see 'ninja: build stopped', the build failed. You MUST fix the source code or dependencies. Do NOT attempt to flash or monitor until the build is fixed.\n" .
-                             "- If you see 'Rebooting...', it is a runtime crash. Analyzes the 'abort()' or 'Panic' message in the logs.\n" .
-                             "- Always read the LAST 200 lines of logs carefully before deciding on your next move.\n" .
-                             "CRITICAL: If a tool returns an 'Error', 'Usage', or 'FAILED' message, you MUST stop, analyze the output, and fix the parameters in your next turn. Do not continue to the next step if the previous one failed.\n" .
+                             "CRITICAL FILE OPERATIONS: All file paths you create, read, or modify MUST be relative to the 'projects/' directory (e.g., 'projects/my_script.py'). Do NOT assume the current working directory is 'projects/'.
+" .
+                             "HARDWARE SPECIFICS:
+" .
+                             "- Target: ESP32-C3
+" .
+                             "- Onboard Addressable LED: GPIO 10 (Use this for all blinky/rainbow tasks).
+" .
+                             "ESP-IDF V5.X GUIDELINES:
+" .
+                             "- For led_strip, use the 'espressif/led_strip' component.
+" .
+                             "- API: Use 'led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip)'.
+" .
+                             "- Built-in components: 'driver', 'esp_log', 'freertos' are ALREADY included. Do NOT add them with esp_idf_add_component.
+" .
+                             "CRITICAL SEQUENCING FOR ESP-IDF:
+" .
+                             "1. Create project (esp_create_project).
+" .
+                             "2. Set target IMMEDIATELY (esp_idf_cmd with action='set-target esp32c3'). This is mandatory for ESP32-C3.
+" .
+                             "3. Add components (esp_idf_add_component).
+" .
+                             "4. Write source code (esp_write_main_source). CRITICAL: Do NOT use 'write_file' for C code. Use 'esp_write_main_source' to ensure the code is placed in 'main/main.c'. Build will fail otherwise.
+" .
+                             "5. Build and Flash (esp_idf_cmd).
+" .
+                             "DEBUGGING PROTOCOL:
+" .
+                             "- If you see 'fatal error: XXX.h: No such file', it is a COMPILATION error. Do NOT check serial ports. Check your 'esp_idf_add_component' calls and your #include statements.
+" .
+                             "- If you see 'ninja: build stopped', the build failed. You MUST fix the source code or dependencies. Do NOT attempt to flash or monitor until the build is fixed.
+" .
+                             "- If you see 'Rebooting...', it is a runtime crash. Analyzes the 'abort()' or 'Panic' message in the logs.
+" .
+                             "- Always read the LAST 200 lines of logs carefully before deciding on your next move.
+" .
+                             "SUB-AGENT PARALLELISM:
+" .
+                             "- To run multiple agents SIMULTANEOUSLY, use 'acp_spawn_agent' or 'acp_query_agent' with 'is_async=true'.
+" .
+                             "- After firing off all async tasks, you MUST call 'acp_wait_all' to collect the results in parallel.
+" .
+                             "- Do NOT spawn agents sequentially if the user asks for parallel execution.
+" .
+                             "CRITICAL: If a tool returns an 'Error', 'Usage', or 'FAILED' message, you MUST stop, analyze the output, and fix the parameters in your next turn. Do not continue to the next step if the previous one failed.
+" .
                              "Do not stop to ask for permission between steps unless you encounter a critical error you cannot solve. " .
                              "Once the entire goal is achieved and verified, summarize your work and wait for new instructions.";
 
@@ -274,9 +318,11 @@ sub loop {
             if ($part->{functionCall}) {
                 my $res_content = $self->execute_tool($part->{functionCall});
                 push @tool_responses, { functionResponse => { name => $part->{functionCall}->{name}, response => { content => $res_content } } };
-                if ($res_content =~ /^(Error:|Usage:|Missing argument|FAILED:)/mi || $res_content =~ /error occurred/i) {
+                if ($res_content =~ /^(Error:|Usage:|Missing argument|FAILED:)/mi || $res_content =~ /\b(critical error|failed significantly|error occurred during execution)\b/i) {
                     $self->wrap_print('red', "[Kernel] Stop-on-error triggered (Detected failure in output). Cancelling remaining tools.");
-                    $res_content .= "\n\nTIP: You likely skipped a step. Check your sequence: Create -> Set-Target -> Add Components -> WRITE CODE -> Build -> Flash.";
+                    $res_content .= "
+
+TIP: You likely skipped a step. Check your sequence: Create -> Set-Target -> Add Components -> WRITE CODE -> Build -> Flash.";
                     $stop_batch = 1;
                 }
             } elsif ($part->{text}) { $self->wrap_print('yellow', "[Agent] $part->{text}"); $has_text = 1; }
@@ -291,11 +337,16 @@ sub loop {
                 $self->push_history("user", [{ text => "SYSTEM: You provided an empty response. Please proceed with the next step using your tools." }]);
             } else {
                 # No tools and no system notifications: Ask the user how to proceed.
-                $self->wrap_print('green', "\n[Goal Finished] How would you like to proceed?");
-                print "  [1] New Goal (Open Editor)\n";
-                print "  [2] Quick Instruction (Single Line)\n";
-                print "  [3] Continue (Let agent keep thinking)\n";
-                print "  [4] Exit\n";
+                $self->wrap_print('green', "
+[Goal Finished] How would you like to proceed?");
+                print "  [1] New Goal (Open Editor)
+";
+                print "  [2] Quick Instruction (Single Line)
+";
+                print "  [3] Continue (Let agent keep thinking)
+";
+                print "  [4] Exit
+";
                 print "Choice [1-4] (default 3): ";
                 
                 my $choice = <STDIN>;
@@ -405,7 +456,9 @@ sub check_processes {
             }
 
             my $msg = "SYSTEM: Background process PID $pid ($action) has finished executing.";
-            $msg .= "\nLAST 200 LINES OF LOG:\n$log_tail" if $log_tail;
+            $msg .= "
+LAST 200 LINES OF LOG:
+$log_tail" if $log_tail;
             $self->push_history("user", [{ text => $msg }]);
         }
     }
@@ -430,19 +483,27 @@ sub check_processes {
                 $proc->{stop_reason} = $reason;
                 
                 my $log_tail = "";
-                if ($proc->{log_file} && -f $proc->{log_file}) {
+                if ($proc->{log_file} && -f ($proc->{log_file})) { # Added parens for safety
                     $log_tail = `tail -n 200 "$proc->{log_file}" 2>/dev/null`;
                 }
 
                 if ($is_error) {
                     my $msg = "SYSTEM NOTIFICATION: Background monitor (PID $pid) for '$proc->{action}' FAILED because: $reason.";
-                    $msg .= "\nLAST 200 LINES OF LOG:\n$log_tail" if $log_tail;
-                    $msg .= "\n\nYou MUST analyze the logs and fix the issue.";
+                    $msg .= "
+LAST 200 LINES OF LOG:
+$log_tail" if $log_tail;
+                    $msg .= "
+
+You MUST analyze the logs and fix the issue.";
                     $self->push_history("user", [{ text => $msg }]);
                 } else {
                     my $msg = "SYSTEM NOTIFICATION: Background monitor (PID $pid) for '$proc->{action}' stopped because: $reason.";
-                    $msg .= "\nLAST 200 LINES OF LOG:\n$log_tail" if $log_tail;
-                    $msg .= "\n\nThe task appears successful. You should now inform the user and ask for the next task.";
+                    $msg .= "
+LAST 200 LINES OF LOG:
+$log_tail" if $log_tail;
+                    $msg .= "
+
+The task appears successful. You should now inform the user and ask for the next task.";
                     $self->push_history("user", [{ text => $msg }]);
                 }
             }

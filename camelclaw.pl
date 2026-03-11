@@ -9,6 +9,7 @@ use Camel::Kernel;
 use skills::System;
 use skills::ESP32;
 use skills::ModifySelf;
+use skills::GeminiACP;
 use Term::ReadKey;
 use Term::ANSIColor;
 use Getopt::Long;
@@ -27,9 +28,7 @@ my $config = do 'config.pl' or die "Could not load config.pl: $!";
 # Initialize
 my $kernel = Camel::Kernel->new(
     max_turns  => 1000,
-    project_id => $config->{gcp_project_id},
-    region     => $config->{gcp_region},
-    local_url  => $config->{local_api_url},
+    config     => $config,
 );
 $kernel->{brain}->{local_token} = $opt_local_token if $opt_local_token;
 $kernel->{brain}->{local_token} //= $config->{local_token} if $config->{local_token};
@@ -44,8 +43,8 @@ my @selected_skills;
 # If there are remaining arguments, join them as the goal
 if (@ARGV) {
     $goal = join(" ", @ARGV);
-    $selected_model = $opt_model || $ENV{GEMINI_MODEL} || "gemini-2.0-flash-001";
-    @selected_skills = ("System", "ESP32", "ModifySelf");
+    $selected_model = $opt_model || $ENV{GEMINI_MODEL} || "gemini-2.5-flash";
+    @selected_skills = ("System", "ESP32", "ModifySelf", "GeminiACP");
 } else {
     print color('bold blue'), "=== CamelClaw Startup Menu ===\n", color('reset');
     
@@ -54,9 +53,9 @@ if (@ARGV) {
     for my $i (0 .. $#$models) {
         print "  [" . ($i + 1) . "] $models->[$i]\n";
     }
-    print "Select [1-" . (@$models) . "] (default 2.0-flash): ";
+    print "Select [1-" . (@$models) . "] (default 2.5-flash): ";
     my $m_idx = <STDIN>; chomp($m_idx);
-    $selected_model = $opt_model || (($m_idx && $m_idx =~ /^\d+$/ && $m_idx <= @$models) ? $models->[$m_idx-1] : "gemini-2.0-flash-001");
+    $selected_model = $opt_model || (($m_idx && $m_idx =~ /^\d+$/ && $m_idx <= @$models) ? $models->[$m_idx-1] : "gemini-2.5-flash");
 
     if ($selected_model eq "local" && !$kernel->{brain}->{local_token}) {
         print color('magenta'), "Enter token for local model (or leave empty): ", color('reset');
@@ -68,7 +67,8 @@ if (@ARGV) {
     my %available_skills = (
         "System"     => "skills::System",
         "ESP32"      => "skills::ESP32",
-        "ModifySelf" => "skills::ModifySelf"
+        "ModifySelf" => "skills::ModifySelf",
+        "GeminiACP"  => "skills::GeminiACP",
     );
     print color('cyan'), "\nSelect Skills (comma separated, e.g., 1,3):\n", color('reset');
     my @s_keys = sort keys %available_skills;
